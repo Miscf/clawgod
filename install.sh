@@ -1409,7 +1409,9 @@ const patches = [
   },
   {
     // CLI subcommand registered via commander chain:
-    //   .command("update").alias("upgrade").description("…").action(async()=>{…})
+    //   ≤v2.1.226: .command("update").alias("upgrade").description("…").action(async()=>{…})
+    //   v2.1.227+: .command("update").alias("upgrade").description("…").action(t(async(a)=>{…})
+    //   (telemetry wrapper t() + callback param added upstream)
     // The original action's update path is broken under clawgod: detectInstallType()
     // returns "unknown" because the launcher hides our cli.cjs from upstream's
     // path heuristics, and the unknown-fallback branch on macOS overwrites
@@ -1427,7 +1429,7 @@ const patches = [
     // Escape hatch printed on every run: `install.sh --uninstall` restores
     // claude.orig and lets vanilla `claude update` work again.
     name: "Redirect `claude update` to clawgod self-update",
-    pattern: /(\.command\("update"\)\.alias\("upgrade"\)\.description\("[^"]+"\))(\.action\(async\(\)=>\{)/g,
+    pattern: /(\.command\("update"\)\.alias\("upgrade"\)\.description\("[^"]+"\))(\.action\((?:[\w$]+\()?async\([^)]*\)=>\{)/g,
     replacer: (m, chain, action) => {
       // PowerShell 5.1's Invoke-WebRequest ignores HTTP_PROXY/HTTPS_PROXY env
       // (only reads IE system proxy). Read env explicitly and pass via -Proxy

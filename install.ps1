@@ -1542,8 +1542,10 @@ const patches = [
     // version is re-extracted, re-patched, and re-launchered without ever
     // touching the bun runtime. Escape hatch for users who want vanilla
     // update is printed every run.
+    // v2.1.227+: action callbacks are wrapped in a telemetry call, e.g.
+    // .action(t(async(a)=>{…}) — the pattern below tolerates both shapes.
     name: "Redirect `claude update` to clawgod self-update",
-    pattern: /(\.command\("update"\)\.alias\("upgrade"\)\.description\("[^"]+"\))(\.action\(async\(\)=>\{)/g,
+    pattern: /(\.command\("update"\)\.alias\("upgrade"\)\.description\("[^"]+"\))(\.action\((?:[\w$]+\()?async\([^)]*\)=>\{)/g,
     replacer: (m, chain, action) => {
       // PowerShell 5.1's Invoke-WebRequest ignores HTTP_PROXY/HTTPS_PROXY env
       // (only reads IE system proxy). Read env explicitly and pass via -Proxy
