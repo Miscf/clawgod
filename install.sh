@@ -7,7 +7,7 @@ set -e
 #  Downloads Claude Code from npm, applies patches, replaces claude command
 #
 #  用法:
-#    curl -fsSL https://raw.githubusercontent.com/0Chencc/clawgod/main/install.sh | bash
+#    curl -fsSL https://raw.githubusercontent.com/Miscf/clawgod/main/install.sh | bash
 #    # 或
 #    bash install.sh [--version 2.1.89] [--no-upgrade]
 # ─────────────────────────────────────────────────────────
@@ -1252,7 +1252,7 @@ try {
       process.stderr.write('[clawgod] v' + _uc.v + ' available (installed: v' + _localVer + ") — run 'claude update' to upgrade\n");
     }
     if (!_uc || Date.now() - (_uc.t || 0) > 86400000) {
-      fetch('https://api.github.com/repos/0Chencc/clawgod/releases/latest', {
+      fetch('https://api.github.com/repos/Miscf/clawgod/releases/latest', {
         headers: { 'User-Agent': 'clawgod' },
         signal: AbortSignal.timeout(5000),
       }).then(function(r) { return r.json(); }).then(function(d) {
@@ -1441,7 +1441,7 @@ const patches = [
       // arg-quoting; payload must be UTF-16LE base64.
       const psScript =
         "$p=if($env:HTTPS_PROXY){$env:HTTPS_PROXY}elseif($env:HTTP_PROXY){$env:HTTP_PROXY}else{$null};" +
-        "$u='https://github.com/0Chencc/clawgod/releases/latest/download/install.ps1';" +
+        "$u='https://github.com/Miscf/clawgod/releases/latest/download/install.ps1';" +
         "if($p){iex(irm -Proxy $p $u)}else{iex(irm $u)}";
       const psB64 = Buffer.from(psScript, 'utf16le').toString('base64');
       return (
@@ -1456,7 +1456,7 @@ const patches = [
         `if(_ua.includes("--lean-max"))process.env.CLAWGOD_LEAN_MAX="1";` +
         `process.stderr.write("[clawgod] 'claude update' is handled by clawgod self-update.\\n[clawgod] To leave clawgod and use vanilla update: bash ~/.clawgod/install.sh --uninstall\\n[clawgod] Continuing now\\u2026\\n");` +
         `const _w=process.platform==='win32';` +
-        `const _c=_w?['powershell','-NoProfile','-EncodedCommand','${psB64}']:['bash','-c','curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash'];` +
+        `const _c=_w?['powershell','-NoProfile','-EncodedCommand','${psB64}']:['bash','-c','curl -fsSL https://github.com/Miscf/clawgod/releases/latest/download/install.sh | bash'];` +
         `const _r=require('child_process').spawnSync(_c[0],_c.slice(1),{stdio:'inherit',env:process.env});` +
         `process.exit(_r.status||0);`
       );
@@ -2025,7 +2025,7 @@ if [ ! -x "$IMPORT_BIN" ]; then
     *)      IMPORT_SUFFIX="" ;;
   esac
   if [ -n "$IMPORT_SUFFIX" ]; then
-    IMPORT_URL="https://github.com/0Chencc/clawgod/releases/latest/download/clawgod-import-$IMPORT_SUFFIX"
+    IMPORT_URL="https://github.com/Miscf/clawgod/releases/latest/download/clawgod-import-$IMPORT_SUFFIX"
     if curl -fsSL -o "$IMPORT_BIN" "$IMPORT_URL" 2>/dev/null; then
       chmod +x "$IMPORT_BIN"
       info "Provider import tool installed (clawgod-import)"
@@ -2052,7 +2052,7 @@ if [ \"\$1\" = \"import\" ]; then
 fi
 if [ ! -f \"\$CLAWGOD_CLI\" ]; then
   echo \"clawgod: installation at $CLAWGOD_DIR is missing (cli.cjs not found)\" >&2
-  echo \"clawgod: reinstall via  curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash\" >&2
+  echo \"clawgod: reinstall via  curl -fsSL https://github.com/Miscf/clawgod/releases/latest/download/install.sh | bash\" >&2
   echo \"clawgod: or remove this launcher:  rm \\\"\$0\\\"\" >&2
   exit 127
 fi
