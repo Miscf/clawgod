@@ -2,11 +2,11 @@
 
 [English](README.md) | [中文](README_ZH.md) | [日本語](README_JP.md)
 
-[![Latest](https://img.shields.io/github/v/release/0chencc/clawgod?style=flat&label=Latest)](https://github.com/0Chencc/clawgod/releases/latest)
-[![Released](https://img.shields.io/github/release-date/0chencc/clawgod?style=flat&label=Released)](https://github.com/0Chencc/clawgod/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/0chencc/clawgod/total?style=flat&label=Downloads)](https://github.com/0Chencc/clawgod/releases)
-[![Compat](https://img.shields.io/github/actions/workflow/status/0chencc/clawgod/compat-daily.yml?branch=main&style=flat&label=Compat)](https://github.com/0Chencc/clawgod/actions/workflows/compat-daily.yml)
-[![Claude tested](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/0Chencc/clawgod/badges/claude-version.json&style=flat)](https://github.com/0Chencc/clawgod/actions/workflows/compat-daily.yml)
+[![Latest](https://img.shields.io/github/v/release/Miscf/clawgod?style=flat&label=Latest)](https://github.com/Miscf/clawgod/releases/latest)
+[![Released](https://img.shields.io/github/release-date/Miscf/clawgod?style=flat&label=Released)](https://github.com/Miscf/clawgod/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/Miscf/clawgod/total?style=flat&label=Downloads)](https://github.com/Miscf/clawgod/releases)
+[![Compat](https://img.shields.io/github/actions/workflow/status/Miscf/clawgod/compat-daily.yml?branch=main&style=flat&label=Compat)](https://github.com/Miscf/clawgod/actions/workflows/compat-daily.yml)
+[![Claude tested](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Miscf/clawgod/badges/claude-version.json&style=flat)](https://github.com/Miscf/clawgod/actions/workflows/compat-daily.yml)
 
 > [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 上帝模式。
 
@@ -27,12 +27,12 @@
 
 **macOS / Linux:**
 ```bash
-curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash
+curl -fsSL https://github.com/Miscf/clawgod/releases/latest/download/install.sh | bash
 ```
 
 **Windows (PowerShell):**
 ```powershell
-irm https://github.com/0Chencc/clawgod/releases/latest/download/install.ps1 | iex
+irm https://github.com/Miscf/clawgod/releases/latest/download/install.ps1 | iex
 ```
 
 绿色 Logo = 已 Patch。橙色 Logo = 原版。
@@ -147,12 +147,12 @@ claude update --no-upgrade        # 不下载新版，只用最新 patcher 重�
 
 **macOS / Linux:**
 ```bash
-curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash
+curl -fsSL https://github.com/Miscf/clawgod/releases/latest/download/install.sh | bash
 ```
 
 **Windows:**
 ```powershell
-irm https://github.com/0Chencc/clawgod/releases/latest/download/install.ps1 | iex
+irm https://github.com/Miscf/clawgod/releases/latest/download/install.ps1 | iex
 ```
 
 如果你想脱离 ClawGod、使用 Anthropic 原本的 `claude update`（它会写到自己管的目录、并把我们的 launcher 替换掉），请先卸载：
@@ -165,13 +165,13 @@ bash ~/.clawgod/install.sh --uninstall
 
 **macOS / Linux:**
 ```bash
-curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash -s -- --uninstall
+curl -fsSL https://github.com/Miscf/clawgod/releases/latest/download/install.sh | bash -s -- --uninstall
 hash -r  # 刷新 shell 缓存
 ```
 
 **Windows:**
 ```powershell
-irm https://github.com/0Chencc/clawgod/releases/latest/download/install.ps1 -OutFile install.ps1; .\install.ps1 -Uninstall
+irm https://github.com/Miscf/clawgod/releases/latest/download/install.ps1 -OutFile install.ps1; .\install.ps1 -Uninstall
 ```
 
 卸载会把 `claude.orig` 还原成 `claude`，并移除 `clawgod` 别名。
@@ -184,4 +184,4 @@ GPL-3.0 — 与 Anthropic 无关，风险自负。
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/chart?repos=0Chencc/clawgod&type=date&legend=top-left)](https://www.star-history.com/?repos=0Chencc%2Fclawgod&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/chart?repos=Miscf/clawgod&type=date&legend=top-left)](https://www.star-history.com/?repos=0Chencc%2Fclawgod&type=date&legend=top-left)
