@@ -7,7 +7,7 @@ set -e
 #  Downloads Claude Code from npm, applies patches, replaces claude command
 #
 #  用法:
-#    curl -fsSL https://raw.githubusercontent.com/Miscf/clawgod/main/install.sh | bash
+#    curl -fsSL https://raw.githubusercontent.com/0Chencc/clawgod/main/install.sh | bash
 #    # 或
 #    bash install.sh [--version 2.1.89] [--no-upgrade]
 # ─────────────────────────────────────────────────────────
@@ -1252,7 +1252,7 @@ try {
       process.stderr.write('[clawgod] v' + _uc.v + ' available (installed: v' + _localVer + ") — run 'claude update' to upgrade\n");
     }
     if (!_uc || Date.now() - (_uc.t || 0) > 86400000) {
-      fetch('https://api.github.com/repos/Miscf/clawgod/releases/latest', {
+      fetch('https://api.github.com/repos/0Chencc/clawgod/releases/latest', {
         headers: { 'User-Agent': 'clawgod' },
         signal: AbortSignal.timeout(5000),
       }).then(function(r) { return r.json(); }).then(function(d) {
@@ -1300,8 +1300,13 @@ const patches = [
     // to behave as if running the native binary. The property is frozen on
     // Bun 1.4+ (configurable:false, writable:false), so runtime monkey-patch
     // is impossible — patch the source instead. See issue #133.
+    //
+    // v2.1.236+ wraps the guard in a typeof-Bun check:
+    //   function fv(){return Bun.isStandaloneExecutable===!0}        ≤v2.1.235
+    //   function kw(){return typeof Bun<"u"&&Bun.isStandaloneExecutable===!0}  v2.1.236+
+    // Match both via an optional `typeof Bun<"u"&&` prefix.
     name: 'Bun.isStandaloneExecutable → true',
-    pattern: /function ([\w$]+)\(\)\{return Bun\.isStandaloneExecutable===!0\}/g,
+    pattern: /function ([\w$]+)\(\)\{return (?:typeof Bun<"u"&&)?Bun\.isStandaloneExecutable===!0\}/g,
     replacer: (m, fn) => `function ${fn}(){return!0}`,
   },
   {
@@ -1409,9 +1414,7 @@ const patches = [
   },
   {
     // CLI subcommand registered via commander chain:
-    //   ≤v2.1.226: .command("update").alias("upgrade").description("…").action(async()=>{…})
-    //   v2.1.227+: .command("update").alias("upgrade").description("…").action(t(async(a)=>{…})
-    //   (telemetry wrapper t() + callback param added upstream)
+    //   .command("update").alias("upgrade").description("…").action(async()=>{…})
     // The original action's update path is broken under clawgod: detectInstallType()
     // returns "unknown" because the launcher hides our cli.cjs from upstream's
     // path heuristics, and the unknown-fallback branch on macOS overwrites
@@ -1428,8 +1431,16 @@ const patches = [
     // latest install.sh from the release so users get patcher fixes too.
     // Escape hatch printed on every run: `install.sh --uninstall` restores
     // claude.orig and lets vanilla `claude update` work again.
+    //
+    // v2.1.232+ wraps the action handler in a framework helper. The helper
+    // is a minified identifier whose name drifts across builds:
+    //   .action(async()=>{…})              ≤v2.1.231
+    //   .action(t(async(a)=>{…}))          v2.1.232 … v2.1.237
+    //   .action(n(async(u)=>{…}))          v2.1.238+
+    // Match any one-letter minified helper via `identifier(` rather than
+    // hardcoding a name, so a future rename keeps matching.
     name: "Redirect `claude update` to clawgod self-update",
-    pattern: /(\.command\("update"\)\.alias\("upgrade"\)\.description\("[^"]+"\))(\.action\((?:[\w$]+\()?async\([^)]*\)=>\{)/g,
+    pattern: /(\.command\("update"\)\.alias\("upgrade"\)\.description\("[^"]+"\))(\.action\((?:[A-Za-z_$][\w$]*\()?async\([^)]*\)=>\{)/g,
     replacer: (m, chain, action) => {
       // PowerShell 5.1's Invoke-WebRequest ignores HTTP_PROXY/HTTPS_PROXY env
       // (only reads IE system proxy). Read env explicitly and pass via -Proxy
@@ -1441,7 +1452,7 @@ const patches = [
       // arg-quoting; payload must be UTF-16LE base64.
       const psScript =
         "$p=if($env:HTTPS_PROXY){$env:HTTPS_PROXY}elseif($env:HTTP_PROXY){$env:HTTP_PROXY}else{$null};" +
-        "$u='https://github.com/Miscf/clawgod/releases/latest/download/install.ps1';" +
+        "$u='https://github.com/0Chencc/clawgod/releases/latest/download/install.ps1';" +
         "if($p){iex(irm -Proxy $p $u)}else{iex(irm $u)}";
       const psB64 = Buffer.from(psScript, 'utf16le').toString('base64');
       return (
@@ -1456,7 +1467,7 @@ const patches = [
         `if(_ua.includes("--lean-max"))process.env.CLAWGOD_LEAN_MAX="1";` +
         `process.stderr.write("[clawgod] 'claude update' is handled by clawgod self-update.\\n[clawgod] To leave clawgod and use vanilla update: bash ~/.clawgod/install.sh --uninstall\\n[clawgod] Continuing now\\u2026\\n");` +
         `const _w=process.platform==='win32';` +
-        `const _c=_w?['powershell','-NoProfile','-EncodedCommand','${psB64}']:['bash','-c','curl -fsSL https://github.com/Miscf/clawgod/releases/latest/download/install.sh | bash'];` +
+        `const _c=_w?['powershell','-NoProfile','-EncodedCommand','${psB64}']:['bash','-c','curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash'];` +
         `const _r=require('child_process').spawnSync(_c[0],_c.slice(1),{stdio:'inherit',env:process.env});` +
         `process.exit(_r.status||0);`
       );
@@ -2025,7 +2036,7 @@ if [ ! -x "$IMPORT_BIN" ]; then
     *)      IMPORT_SUFFIX="" ;;
   esac
   if [ -n "$IMPORT_SUFFIX" ]; then
-    IMPORT_URL="https://github.com/Miscf/clawgod/releases/latest/download/clawgod-import-$IMPORT_SUFFIX"
+    IMPORT_URL="https://github.com/0Chencc/clawgod/releases/latest/download/clawgod-import-$IMPORT_SUFFIX"
     if curl -fsSL -o "$IMPORT_BIN" "$IMPORT_URL" 2>/dev/null; then
       chmod +x "$IMPORT_BIN"
       info "Provider import tool installed (clawgod-import)"
@@ -2052,7 +2063,7 @@ if [ \"\$1\" = \"import\" ]; then
 fi
 if [ ! -f \"\$CLAWGOD_CLI\" ]; then
   echo \"clawgod: installation at $CLAWGOD_DIR is missing (cli.cjs not found)\" >&2
-  echo \"clawgod: reinstall via  curl -fsSL https://github.com/Miscf/clawgod/releases/latest/download/install.sh | bash\" >&2
+  echo \"clawgod: reinstall via  curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash\" >&2
   echo \"clawgod: or remove this launcher:  rm \\\"\$0\\\"\" >&2
   exit 127
 fi
