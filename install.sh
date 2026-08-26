@@ -629,7 +629,7 @@ function main() {
       console.log(`  napi     ${(m.content.length / 1024).toFixed(0).padStart(5)} KB → ${out}`);
       napiCount++;
     } else if (JSY.has(m.loader)) {
-      const virt = norm(m.name).replace(/^\/\$bunfs\/root\//, '');
+      const virt = norm(m.name).replace(/^(?:\/\$bunfs|B:\/~BUN)\/root\//, '');
       if (!virt || virt.startsWith('..') || virt.includes('\0')) {
         console.warn(`  skip module ${m.name}: unsafe virtual path`); dropped++; continue;
       }
@@ -691,7 +691,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 // .bunfs-manifest rows: [virtualPath, loader, diskRelPath]
 const rows = readFileSync(join(here, '.bunfs-manifest'), 'utf8')
   .trim().split('\n').map(l => l.split('\t'));
-const diskOf = new Map(rows.map(([virt, , disk]) => [virt.replace(/^\/\$bunfs\/root\//, ''), disk]));
+const diskOf = new Map(rows.map(([virt, , disk]) => [virt.replace(/^(?:\/\$bunfs|B:\/~BUN)\/root\//, ''), disk]));
 
 // loaders whose content is regex-rewritable text (assets like wasm are
 // written to disk but must never be decoded/re-encoded as utf8)
@@ -710,7 +710,7 @@ const residual = [];
 function rewriteBunfs(code, disk) {
   // (1) napi requires → runtime vendor lookup, relative to this file
   code = code.replace(
-    /require\(['"](\/\$bunfs\/root\/([\w-]+)\.node)['"]\)/g,
+    /require\(['"]((?:\/\$bunfs|B:\/~BUN)\/root\/([\w-]+)\.node)['"]\)/g,
     (m, q, name) =>
       `require(require('path').join(__dirname,${JSON.stringify(relative(dirname(disk), join('vendor', name)).replaceAll('\\', '/'))},${platformDir},${JSON.stringify(name + '.node')}))`,
   );
@@ -718,16 +718,23 @@ function rewriteBunfs(code, disk) {
   // wraps napi requires in helper(...) call forms) → vendor join expression.
   // (1) above already consumed the plain require("...") forms.
   code = code.replace(
-    /(['"])\/\$bunfs\/root\/([\w-]+)\.node\1/g,
+    /(['"])(?:\/\$bunfs|B:\/~BUN)\/root\/([\w-]+)\.node\1/g,
     // bare expression, NOT a quoted string: these positions pass the path to
     // loader helpers — helper(<expr>) — so quotes would make it a literal
     (m, _q, name) =>
       `require('path').join(__dirname,${JSON.stringify(relative(dirname(disk), join('vendor', name)).replaceAll('\\', '/'))},${platformDir},${JSON.stringify(name + '.node')})`,
   );
+  // (1c) bare virtual-root prefix constant (windows builds keep
+  //      `var x="B:/~BUN/root/"` and concatenate names onto it at runtime)
+  //      → absolute path of the on-disk bunfs/ dir + trailing slash
+  code = code.replace(
+    /(['"])(?:\/\$bunfs|B:\/~BUN)\/root\/\1/g,
+    (m, _q) => `require('path').join(__dirname,${JSON.stringify(relative(dirname(disk), 'bunfs').replaceAll('\\', '/'))})+'/'`,
+  );
   // (2) every remaining virtual-path literal (import from, dynamic import(),
   // require, Bun.file) → relative specifier to the extracted module
   code = code.replace(
-    /(['"])\/\$bunfs\/root\/([^'"]+)\1/g,
+    /(['"])(?:\/\$bunfs|B:\/~BUN)\/root\/([^'"]+)\1/g,
     (m, q, vp) => {
       const target = diskOf.get(vp.replaceAll('\\', '/'));
       if (!target) { residual.push(disk + ': no module for ' + vp); return m; }
@@ -772,7 +779,7 @@ unlinkSync(src);
 for (const [, loader, disk] of rows) {
   if (!CODE.has(loader)) continue;
   const f = disk === 'cli.original.js' ? 'cli.original.cjs' : disk;
-  for (const m of readFileSync(join(here, f), 'utf8').matchAll(/\/\$bunfs\/root\/[^'"\`\s)]*/g)) {
+  for (const m of readFileSync(join(here, f), 'utf8').matchAll(/(?:\/\$bunfs|B:\/~BUN)\/root\/[^'"\`\s)]*/g)) {
     residual.push(f + ': leftover ' + m[0]);
   }
 }
