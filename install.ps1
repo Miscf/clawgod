@@ -6,7 +6,7 @@
     Downloads Claude Code from npm, applies feature unlock patches,
     and replaces the 'claude' command with the patched version.
 .EXAMPLE
-    irm clawgod.0chen.cc/install.ps1 | iex
+    irm https://github.com/Miscf/clawgod/releases/latest/download/install.ps1 | iex
     # or
     .\install.ps1
     .\install.ps1 -Version 2.1.89
@@ -73,7 +73,7 @@ if ($Uninstall) {
         Write-OK "Removed clawgod alias"
     }
 
-    foreach ($f in @("cli.js","cli.cjs","cli.original.js","cli.original.cjs","cli.original.js.bak","cli.original.cjs.bak","patch.js","patch.mjs","extract-natives.mjs","post-process.mjs","repatch.mjs","openai-proxy.cjs","clawgod-import.exe",".source-version","node_modules","bun-runtime","vendor")) {
+    foreach ($f in @("cli.js","cli.cjs","cli.original.js","cli.original.cjs","cli.original.js.bak","cli.original.cjs.bak","patch.js","patch.mjs","extract-natives.mjs","post-process.mjs","repatch.mjs","openai-proxy.cjs","clawgod-import.exe",".source-version","node_modules","bunfs",".bunfs-manifest","bun-runtime","vendor")) {
         $p = Join-Path $ClawDir $f
         if (Test-Path $p) { Remove-Item -Recurse -Force $p }
     }
@@ -441,7 +441,7 @@ $extractorPath = Join-Path $ClawDir "extract-natives.mjs"
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { join, basename } from 'node:path';
+import { join, basename, dirname } from 'node:path';
 
 // ─── Format constants ────────────────────────────────────────────────
 
@@ -748,12 +748,23 @@ function main() {
 
   mkdirSync(outputDir, { recursive: true });
 
+  // claude >= 2.1.24x ships a code-split graph (~1.5k JS chunks + assets).
+  // The entry alone is no longer self-contained: it imports siblings via
+  // absolute virtual paths ("/$bunfs/root/_821.js") that only resolve inside
+  // the compiled binary. Write every JS/text module to <out>/bunfs/<relpath>;
+  // post-process.mjs rewrites all references to real relative paths. Older
+  // single-module builds simply have no siblings — this is a no-op for them.
+  const JSY = new Set(['js','jsx','ts','tsx','json','jsonc','yaml','json5','toml','md','html','css','text','file','wasm','base64','dataurl','bunsh']);
+  const norm = (n) => n.replaceAll('\\', '/');
+  const manifest = [];   // rows: [virtualPath, loader, diskRelPath]
+  const seen = new Map();
   let cliCount = 0, napiCount = 0, dropped = 0;
   for (const m of modules) {
     if (m.entry) {
       const out = join(outputDir, 'cli.original.js');
       writeFileSync(out, m.content);
       console.log(`  cli.js   ${(m.content.length / 1024 / 1024).toFixed(2)} MB → ${out} (${m.name})`);
+      manifest.push([norm(m.name), 'entry', 'cli.original.js']);
       cliCount++;
     } else if (m.loader === 'napi') {
       const base = napiBasename(m.name);
@@ -764,11 +775,24 @@ function main() {
       writeFileSync(out, m.content);
       console.log(`  napi     ${(m.content.length / 1024).toFixed(0).padStart(5)} KB → ${out}`);
       napiCount++;
+    } else if (JSY.has(m.loader)) {
+      const virt = norm(m.name).replace(/^(?:\/\$bunfs|B:\/~BUN)\/root\//, '');
+      if (!virt || virt.startsWith('..') || virt.includes('\0')) {
+        console.warn(`  skip module ${m.name}: unsafe virtual path`); dropped++; continue;
+      }
+      const rel = join('bunfs', virt);
+      if (seen.has(rel)) { console.error(`error: module path collision: ${rel} (${seen.get(rel)} vs ${m.name})`); process.exit(3); }
+      const out = join(outputDir, rel);
+      mkdirSync(dirname(out), { recursive: true });
+      writeFileSync(out, m.content);
+      seen.set(rel, m.name);
+      manifest.push([norm(m.name), m.loader, rel]);
     } else {
       dropped++;
     }
   }
-  console.log(`Extracted: ${cliCount} cli.js + ${napiCount} napi (${dropped} dropped)`);
+  writeFileSync(join(outputDir, '.bunfs-manifest'), manifest.map(r => r.join('\t')).join('\n') + '\n');
+  console.log(`Extracted: ${cliCount} cli.js + ${manifest.length - cliCount} bunfs modules + ${napiCount} napi (${dropped} dropped)`);
   if (cliCount !== 1) {
     console.error(`error: expected exactly 1 entry-point, got ${cliCount}`);
     process.exit(2);
@@ -790,6 +814,7 @@ if (Test-Path $dstCli) { Remove-Item -Force $dstCli }
 
 Write-Dim "Extracting cli.js + napi modules from $NativeBinLabel ..."
 & node $extractorPath $NativeBin $ClawDir 2>&1 | ForEach-Object { Write-Host "  $_" }
+if ($LASTEXITCODE -ne 0) { Write-Err "Extractor failed (exit $LASTEXITCODE)"; exit 1 }
 if (-not (Test-Path $dstCli)) {
     Write-Err "Failed to extract cli.js from native binary"
     exit 1
@@ -803,41 +828,116 @@ Write-Dim "Rewriting bunfs paths and IIFE invocation ..."
 $postProc = Join-Path $ClawDir "post-process.mjs"
 @'
 import { readFileSync, writeFileSync, unlinkSync } from 'fs';
-import { dirname } from 'path';
+import { dirname, join, relative } from 'path';
 import { fileURLToPath } from 'url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const src = `${here}/cli.original.js`;
-const dst = `${here}/cli.original.cjs`;
 
+// .bunfs-manifest rows: [virtualPath, loader, diskRelPath]
+const rows = readFileSync(join(here, '.bunfs-manifest'), 'utf8')
+  .trim().split('\n').map(l => l.split('\t'));
+const diskOf = new Map(rows.map(([virt, , disk]) => [virt.replace(/^(?:\/\$bunfs|B:\/~BUN)\/root\//, ''), disk]));
+
+// loaders whose content is regex-rewritable text (assets like wasm are
+// written to disk but must never be decoded/re-encoded as utf8)
+const CODE = new Set(['entry','js','jsx','ts','tsx','json','jsonc','yaml','json5','toml','md','html','css']);
+
+const platformDir = `${process.arch==='arm64'?'arm64':'x64'}-${process.platform==='darwin'?'darwin':process.platform==='linux'?'linux':'win32'}`;
+
+// relative specifier usable from diskRel `from` to diskRel `to`
+function spec(from, to) {
+  const r = relative(dirname(from), to).replaceAll('\\', '/');
+  return r.startsWith('.') ? r : './' + r;
+}
+
+const residual = [];
+
+function rewriteBunfs(code, disk) {
+  // (1) napi requires → runtime vendor lookup, relative to this file
+  code = code.replace(
+    /require\(['"]((?:\/\$bunfs|B:\/~BUN)\/root\/([\w-]+)\.node)['"]\)/g,
+    (m, q, name) =>
+      `require(require('path').join(__dirname,${JSON.stringify(relative(dirname(disk), join('vendor', name)).replaceAll('\\', '/'))},${platformDir},${JSON.stringify(name + '.node')}))`,
+  );
+  // (1b) .node path literals in non-require positions (bun's cjs interop
+  // wraps napi requires in helper(...) call forms) → vendor join expression.
+  // (1) above already consumed the plain require("...") forms.
+  code = code.replace(
+    /(['"])(?:\/\$bunfs|B:\/~BUN)\/root\/([\w-]+)\.node\1/g,
+    // bare expression, NOT a quoted string: these positions pass the path to
+    // loader helpers — helper(<expr>) — so quotes would make it a literal
+    (m, _q, name) =>
+      `require('path').join(__dirname,${JSON.stringify(relative(dirname(disk), join('vendor', name)).replaceAll('\\', '/'))},${platformDir},${JSON.stringify(name + '.node')})`,
+  );
+  // (1c) bare virtual-root prefix constant (windows builds keep
+  //      `var x="B:/~BUN/root/"` and concatenate names onto it at runtime)
+  //      → absolute path of the on-disk bunfs/ dir + trailing slash
+  code = code.replace(
+    /(['"])(?:\/\$bunfs|B:\/~BUN)\/root\/\1/g,
+    (m, _q) => `require('path').join(__dirname,${JSON.stringify(relative(dirname(disk), 'bunfs').replaceAll('\\', '/'))})+'/'`,
+  );
+  // (2) every remaining virtual-path literal (import from, dynamic import(),
+  // require, Bun.file) → relative specifier to the extracted module
+  code = code.replace(
+    /(['"])(?:\/\$bunfs|B:\/~BUN)\/root\/([^'"]+)\1/g,
+    (m, q, vp) => {
+      const target = diskOf.get(vp.replaceAll('\\', '/'));
+      if (!target) { residual.push(disk + ': no module for ' + vp); return m; }
+      return q + spec(disk, target) + q;
+    },
+  );
+  // (3) build-time fileURLToPath() leaks → module's own __filename
+  code = code.replace(
+    /[\w$]+\.fileURLToPath\("file:\/\/\/home\/runner\/work\/claude-cli-internal\/claude-cli-internal\/[^"]*"\)/g,
+    () => '__filename',
+  );
+  return code;
+}
+
+for (const [virt, loader, disk] of rows) {
+  if (!CODE.has(loader)) continue;
+  const path = join(here, disk);
+  let code = readFileSync(path, 'utf8');
+  // @bun pragma lines only matter inside a compiled binary
+  code = code.replace(/^\/\/ @bun[^\n]*\n?/gm, '');
+  code = rewriteBunfs(code, disk);
+  writeFileSync(path, code);
+}
+
+// Entry: cli.original.js → cli.original.cjs. Legacy single-module builds
+// carry a "(function(...){...})" CJS wrapper that needs an invocation
+// appended; code-split builds are ESM and must NOT get it.
+const src = join(here, 'cli.original.js');
+const dst = join(here, 'cli.original.cjs');
 let code = readFileSync(src, 'utf8');
-
-// (0) Strip leading @bun pragma comments (e.g. "// @bun @bytecode @bun-cjs\n")
-// Bun requires the file to start directly with "(function" to recognize
-// the CommonJS wrapper; any preceding comment breaks that detection.
-code = code.replace(/^(?:\/\/[^\n]*\n)+/, '');
-
-// (1) bunfs .node module paths → runtime vendor lookup
-code = code.replace(
-  /require\(['"](\/\$bunfs\/root\/([\w-]+)\.node)['"]\)/g,
-  (m, _full, name) =>
-    `require(require('path').join(__dirname,'vendor',${JSON.stringify(name)},\`\${process.arch==='arm64'?'arm64':'x64'}-\${process.platform==='darwin'?'darwin':process.platform==='linux'?'linux':'win32'}\`,${JSON.stringify(name + '.node')}))`,
-);
-
-// (2) build-time fileURLToPath() leaks → use cli.cjs's own __filename
-code = code.replace(
-  /[\w$]+\.fileURLToPath\("file:\/\/\/home\/runner\/work\/claude-cli-internal\/claude-cli-internal\/[^"]*"\)/g,
-  () => '__filename',
-);
-
-// (3) make the outer (function(...){...}) actually run
-code = code.replace(/\}\)\s*$/, '})(exports, require, module, __filename, __dirname)');
-
+code = code.replace(/^\/\/ @bun[^\n]*\n?/gm, '');
+code = rewriteBunfs(code, 'cli.original.js');
+if (code.replace(/^(?:\/\/[^\n]*\n)+/, '').startsWith('(function')) {
+  code = code.replace(/\}\)\s*$/, '})(exports, require, module, __filename, __dirname)');
+}
 writeFileSync(dst, code);
 unlinkSync(src);
-console.log(`cli.original.cjs: ${code.length} bytes`);
+
+// Residual gate: any surviving virtual path means the module graph did not
+// fully materialize — fail the install instead of shipping a launcher that
+// dies at runtime with "Cannot find module '/$bunfs/root/...'".
+for (const [, loader, disk] of rows) {
+  if (!CODE.has(loader)) continue;
+  const f = disk === 'cli.original.js' ? 'cli.original.cjs' : disk;
+  for (const m of readFileSync(join(here, f), 'utf8').matchAll(/(?:\/\$bunfs|B:\/~BUN)\/root\/[^'"\`\s)]*/g)) {
+    residual.push(f + ': leftover ' + m[0]);
+  }
+}
+const uniq = [...new Set(residual)];
+if (uniq.length) {
+  console.error('post-process: unresolved bunfs references:');
+  for (const r of uniq.slice(0, 20)) console.error('  ' + r);
+  process.exit(1);
+}
+console.log(`cli.original.cjs: ${code.length} bytes (+${rows.length - 1} bunfs modules rewritten)`);
 '@ | Set-Content $postProc -Encoding UTF8
 & node $postProc 2>&1 | ForEach-Object { Write-Host "  $_" }
+if ($LASTEXITCODE -ne 0) { Write-Err "Post-process failed (exit $LASTEXITCODE)"; exit 1 }
 if (-not (Test-Path (Join-Path $ClawDir "cli.original.cjs"))) {
     Write-Err "Post-process failed"
     exit 1
@@ -874,7 +974,10 @@ if (!nativeBin || !existsSync(nativeBin)) {
 }
 
 rmSync(join(here, 'vendor'), { recursive: true, force: true });
+rmSync(join(here, 'bunfs'), { recursive: true, force: true });
+rmSync(join(here, '.bunfs-manifest'), { force: true });
 rmSync(join(here, 'cli.original.js'), { force: true });
+rmSync(join(here, 'cli.original.cjs'), { force: true });
 
 const runtime = process.execPath;
 
@@ -1368,7 +1471,7 @@ try {
       process.stderr.write('[clawgod] v' + _uc.v + ' available (installed: v' + _localVer + ") — run 'claude update' to upgrade\n");
     }
     if (!_uc || Date.now() - (_uc.t || 0) > 86400000) {
-      fetch('https://api.github.com/repos/0Chencc/clawgod/releases/latest', {
+      fetch('https://api.github.com/repos/Miscf/clawgod/releases/latest', {
         headers: { 'User-Agent': 'clawgod' },
         signal: AbortSignal.timeout(5000),
       }).then(function(r) { return r.json(); }).then(function(d) {
@@ -1567,7 +1670,7 @@ const patches = [
       // arg-quoting; payload must be UTF-16LE base64.
       const psScript =
         "$p=if($env:HTTPS_PROXY){$env:HTTPS_PROXY}elseif($env:HTTP_PROXY){$env:HTTP_PROXY}else{$null};" +
-        "$u='https://github.com/0Chencc/clawgod/releases/latest/download/install.ps1';" +
+        "$u='https://github.com/Miscf/clawgod/releases/latest/download/install.ps1';" +
         "if($p){iex(irm -Proxy $p $u)}else{iex(irm $u)}";
       const psB64 = Buffer.from(psScript, 'utf16le').toString('base64');
       return (
@@ -1582,7 +1685,7 @@ const patches = [
         `if(_ua.includes("--lean-max"))process.env.CLAWGOD_LEAN_MAX="1";` +
         `process.stderr.write("[clawgod] 'claude update' is handled by clawgod self-update.\\n[clawgod] To leave clawgod and use vanilla update: bash ~/.clawgod/install.sh --uninstall\\n[clawgod] Continuing now\\u2026\\n");` +
         `const _w=process.platform==='win32';` +
-        `const _c=_w?['powershell','-NoProfile','-EncodedCommand','${psB64}']:['bash','-c','curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash'];` +
+        `const _c=_w?['powershell','-NoProfile','-EncodedCommand','${psB64}']:['bash','-c','curl -fsSL https://github.com/Miscf/clawgod/releases/latest/download/install.sh | bash'];` +
         `const _r=require('child_process').spawnSync(_c[0],_c.slice(1),{stdio:'inherit',env:process.env});` +
         `process.exit(_r.status||0);`
       );
@@ -1762,23 +1865,33 @@ if (!existsSync(TARGET)) {
   process.exit(1);
 }
 
-let code = readFileSync(TARGET, 'utf8');
-const origSize = code.length;
-const verMatch = code.match(/Version:\s*([\d.]+)/);
-const version = verMatch ? verMatch[1] : 'unknown';
+// Targets: the entry plus every code module extracted to bunfs/ —
+// code-split builds (claude >= 2.1.24x) keep most of the app in sibling
+// chunks, so the regex patches must run across the whole set.
+const rowsM = readFileSync(join(__dirname, '.bunfs-manifest'), 'utf8').trim().split('\n').map(l => l.split('\t'));
+const PATCHABLE = new Set(['entry', 'js', 'jsx', 'ts', 'tsx']);
+const targets = rowsM.filter(([, loader]) => PATCHABLE.has(loader)).map(([, , disk]) => disk === 'cli.original.js' ? 'cli.original.cjs' : disk);
+const codes = new Map(targets.map(t2 => [t2, readFileSync(join(__dirname, t2), 'utf8')]));
+const origSize = [...codes.values()].reduce((a, c) => a + c.length, 0);
+const allCode = () => [...codes.values()].join('\n');
+
+let version = 'unknown';
+for (const c of codes.values()) {
+  const vm = c.match(/Version:\s*([\d.]+)/);
+  if (vm) { version = vm[1]; break; }
+}
 
 console.log(`\n${'='.repeat(55)}`);
 console.log(`  ClawGod (universal)`);
-console.log(`  Target: cli.original.cjs (v${version})`);
+console.log(`  Target: cli.original.cjs + ${targets.length - 1} bunfs modules (v${version})`);
 console.log(`  Mode: ${dryRun ? 'DRY RUN' : verify ? 'VERIFY' : 'APPLY'}`);
 console.log(`${'='.repeat(55)}\n`);
 
 let applied = 0, skipped = 0, failed = 0;
 
 for (const p of patches) {
-  const matches = [...code.matchAll(p.pattern)];
-  let relevant = matches;
-  if (p.validate) relevant = matches.filter(m => p.validate(m[0], code));
+  let relevant = [...codes].flatMap(([f, c]) => [...c.matchAll(p.pattern)].map(m => ({ f, m })));
+  if (p.validate) relevant = relevant.filter(({ f, m }) => p.validate(m[0], codes.get(f)));
   if (p.selectIndex !== undefined) relevant = relevant.length > p.selectIndex ? [relevant[p.selectIndex]] : [];
   if (p.unique && relevant.length > 1) {
     console.log(`  ?? ${p.name} — ${relevant.length} matches (need 1)`);
@@ -1788,7 +1901,7 @@ for (const p of patches) {
     if (p.optional) { console.log(`  >> ${p.name} (not in this version)`); skipped++; continue; }
     if (p.sentinel !== undefined) {
       const sentinels = Array.isArray(p.sentinel) ? p.sentinel : [p.sentinel];
-      const stillPresent = sentinels.filter((s) => code.includes(s));
+      const stillPresent = sentinels.filter((s) => allCode().includes(s));
       if (stillPresent.length > 0) {
         console.log(`  XX ${p.name} — regex stale, sentinel still present: ${stillPresent.map((s) => JSON.stringify(s)).join(', ')}`);
         failed++; continue;
@@ -1800,11 +1913,11 @@ for (const p of patches) {
   }
   if (verify) { console.log(`  -- ${p.name} — not yet applied`); skipped++; continue; }
   let count = 0;
-  for (const m of relevant) {
+  for (const { f, m } of relevant) {
     const replacement = p.replacer(m[0], ...m.slice(1));
     // Function-form replace: a string replacement would interpret $$ as $
     // and break minified identifiers like `a$$`. See install.sh issue #86.
-    if (replacement !== m[0]) { if (!dryRun) code = code.replace(m[0], () => replacement); count++; }
+    if (replacement !== m[0]) { if (!dryRun) codes.set(f, codes.get(f).replace(m[0], () => replacement)); count++; }
   }
   if (count > 0) { console.log(`  OK ${p.name} (${count})`); applied++; }
   else { console.log(`  >> ${p.name} (no change)`); skipped++; }
@@ -1815,8 +1928,13 @@ console.log(`  Result: ${applied} applied, ${skipped} skipped, ${failed} failed`
 
 if (!dryRun && !verify && applied > 0) {
   if (!existsSync(BACKUP)) { copyFileSync(TARGET, BACKUP); console.log(`  Backup: ${BACKUP}`); }
-  writeFileSync(TARGET, code, 'utf8');
-  console.log(`  Written: cli.original.cjs (${code.length - origSize} bytes)`);
+  let diff = 0;
+  for (const [f, c] of codes) {
+    const before = readFileSync(join(__dirname, f), 'utf8').length;
+    writeFileSync(join(__dirname, f), c, 'utf8');
+    diff += c.length - before;
+  }
+  console.log(`  Written: ${targets.length} files (${diff >= 0 ? '+' : ''}${diff} bytes)`);
 }
 console.log(`${'='.repeat(55)}\n`);
 '@
@@ -1828,6 +1946,7 @@ Write-OK "Patcher created (patch.mjs)"
 
 Write-Dim "Applying patches ..."
 node (Join-Path $ClawDir "patch.mjs")
+if ($LASTEXITCODE -ne 0) { Write-Err "Patcher failed (exit $LASTEXITCODE)"; exit 1 }
 
 # ─── Create default configs ───────────────────────────
 
@@ -1941,6 +2060,16 @@ try {
 } finally {
     $ErrorActionPreference = $prevEAP
 }
+if ($sanityOut -match "Cannot find module") {
+    Write-Err "Sanity check failed — unresolved module reference (extraction left dangling bunfs paths):"
+    ($sanityOut.Trim() -split "`n" | Select-Object -First 3) | ForEach-Object { Write-Err "  $_" }
+    exit 1
+}
+if ($sanityOut -notmatch "(?m)^\d+\.\d+") {
+    Write-Err "Sanity check failed — 'claude --version' did not print a version:"
+    ($sanityOut.Trim() -split "`n" | Select-Object -First 3) | ForEach-Object { Write-Err "  $_" }
+    exit 1
+}
 if ($sanityOut -match "Expected CommonJS module to have a function wrapper") {
     Write-Host ""
     Write-Err "Bun $(& $BunBin --version) cannot load Anthropic's cli.original.cjs."
@@ -1987,7 +2116,7 @@ if ($normalizedBunBin.Equals($normalizedUserProfile, [StringComparison]::Ordinal
 # Download clawgod-import binary
 $importBin = Join-Path $ClawDir "clawgod-import.exe"
 if (-not (Test-Path $importBin)) {
-    $importUrl = "https://github.com/0Chencc/clawgod/releases/latest/download/clawgod-import-windows-x64.exe"
+    $importUrl = "https://github.com/Miscf/clawgod/releases/latest/download/clawgod-import-windows-x64.exe"
     try {
         Invoke-WebRequest -Uri $importUrl -OutFile $importBin -UseBasicParsing -ErrorAction Stop
         Write-OK "Provider import tool installed (clawgod-import.exe)"
@@ -1997,7 +2126,7 @@ if (-not (Test-Path $importBin)) {
 }
 
 $importPathInCmd = "%USERPROFILE%\.clawgod\clawgod-import.exe"
-$launcherContent = "@echo off`r`nif `"%~1`"==`"import`" (`r`n  if exist `"$importPathInCmd`" (`r`n    shift`r`n    `"$importPathInCmd`" %1 %2 %3 %4 %5 %6 %7 %8 %9`r`n    exit /b %ERRORLEVEL%`r`n  ) else (`r`n    echo clawgod: import tool not installed. Reinstall clawgod to get it.`r`n    exit /b 127`r`n  )`r`n)`r`nif not exist `"$cliPathInCmd`" (`r`n  echo clawgod: cli.cjs not found. Reinstall: irm https://github.com/0Chencc/clawgod/releases/latest/download/install.ps1 ^| iex`r`n  exit /b 127`r`n)`r`nif not exist `"$bunPathInCmd`" (`r`n  echo clawgod: bun not found at $bunPathInCmd. Install: https://bun.sh/install`r`n  exit /b 127`r`n)`r`nset `"CLAUDE_CODE_EXECPATH=%~dp0claude.orig.exe`"`r`n`"$bunPathInCmd`" `"$cliPathInCmd`" %*"
+$launcherContent = "@echo off`r`nif `"%~1`"==`"import`" (`r`n  if exist `"$importPathInCmd`" (`r`n    shift`r`n    `"$importPathInCmd`" %1 %2 %3 %4 %5 %6 %7 %8 %9`r`n    exit /b %ERRORLEVEL%`r`n  ) else (`r`n    echo clawgod: import tool not installed. Reinstall clawgod to get it.`r`n    exit /b 127`r`n  )`r`n)`r`nif not exist `"$cliPathInCmd`" (`r`n  echo clawgod: cli.cjs not found. Reinstall: irm https://github.com/Miscf/clawgod/releases/latest/download/install.ps1 ^| iex`r`n  exit /b 127`r`n)`r`nif not exist `"$bunPathInCmd`" (`r`n  echo clawgod: bun not found at $bunPathInCmd. Install: https://bun.sh/install`r`n  exit /b 127`r`n)`r`nset `"CLAUDE_CODE_EXECPATH=%~dp0claude.orig.exe`"`r`n`"$bunPathInCmd`" `"$cliPathInCmd`" %*"
 
 # Find and back up original claude
 $claudeCmd = Join-Path $BinDir "claude.cmd"

@@ -7,7 +7,7 @@ set -e
 #  Downloads Claude Code from npm, applies patches, replaces claude command
 #
 #  用法:
-#    curl -fsSL https://raw.githubusercontent.com/0Chencc/clawgod/main/install.sh | bash
+#    curl -fsSL https://raw.githubusercontent.com/Miscf/clawgod/main/install.sh | bash
 #    # 或
 #    bash install.sh [--version 2.1.89] [--no-upgrade]
 # ─────────────────────────────────────────────────────────
@@ -629,7 +629,7 @@ function main() {
       console.log(`  napi     ${(m.content.length / 1024).toFixed(0).padStart(5)} KB → ${out}`);
       napiCount++;
     } else if (JSY.has(m.loader)) {
-      const virt = norm(m.name).replace(/^\/\$bunfs\/root\//, '');
+      const virt = norm(m.name).replace(/^(?:\/\$bunfs|B:\/~BUN)\/root\//, '');
       if (!virt || virt.startsWith('..') || virt.includes('\0')) {
         console.warn(`  skip module ${m.name}: unsafe virtual path`); dropped++; continue;
       }
@@ -691,7 +691,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 // .bunfs-manifest rows: [virtualPath, loader, diskRelPath]
 const rows = readFileSync(join(here, '.bunfs-manifest'), 'utf8')
   .trim().split('\n').map(l => l.split('\t'));
-const diskOf = new Map(rows.map(([virt, , disk]) => [virt.replace(/^\/\$bunfs\/root\//, ''), disk]));
+const diskOf = new Map(rows.map(([virt, , disk]) => [virt.replace(/^(?:\/\$bunfs|B:\/~BUN)\/root\//, ''), disk]));
 
 // loaders whose content is regex-rewritable text (assets like wasm are
 // written to disk but must never be decoded/re-encoded as utf8)
@@ -710,7 +710,7 @@ const residual = [];
 function rewriteBunfs(code, disk) {
   // (1) napi requires → runtime vendor lookup, relative to this file
   code = code.replace(
-    /require\(['"](\/\$bunfs\/root\/([\w-]+)\.node)['"]\)/g,
+    /require\(['"]((?:\/\$bunfs|B:\/~BUN)\/root\/([\w-]+)\.node)['"]\)/g,
     (m, q, name) =>
       `require(require('path').join(__dirname,${JSON.stringify(relative(dirname(disk), join('vendor', name)).replaceAll('\\', '/'))},${platformDir},${JSON.stringify(name + '.node')}))`,
   );
@@ -718,16 +718,23 @@ function rewriteBunfs(code, disk) {
   // wraps napi requires in helper(...) call forms) → vendor join expression.
   // (1) above already consumed the plain require("...") forms.
   code = code.replace(
-    /(['"])\/\$bunfs\/root\/([\w-]+)\.node\1/g,
+    /(['"])(?:\/\$bunfs|B:\/~BUN)\/root\/([\w-]+)\.node\1/g,
     // bare expression, NOT a quoted string: these positions pass the path to
     // loader helpers — helper(<expr>) — so quotes would make it a literal
     (m, _q, name) =>
       `require('path').join(__dirname,${JSON.stringify(relative(dirname(disk), join('vendor', name)).replaceAll('\\', '/'))},${platformDir},${JSON.stringify(name + '.node')})`,
   );
+  // (1c) bare virtual-root prefix constant (windows builds keep
+  //      `var x="B:/~BUN/root/"` and concatenate names onto it at runtime)
+  //      → absolute path of the on-disk bunfs/ dir + trailing slash
+  code = code.replace(
+    /(['"])(?:\/\$bunfs|B:\/~BUN)\/root\/\1/g,
+    (m, _q) => `require('path').join(__dirname,${JSON.stringify(relative(dirname(disk), 'bunfs').replaceAll('\\', '/'))})+'/'`,
+  );
   // (2) every remaining virtual-path literal (import from, dynamic import(),
   // require, Bun.file) → relative specifier to the extracted module
   code = code.replace(
-    /(['"])\/\$bunfs\/root\/([^'"]+)\1/g,
+    /(['"])(?:\/\$bunfs|B:\/~BUN)\/root\/([^'"]+)\1/g,
     (m, q, vp) => {
       const target = diskOf.get(vp.replaceAll('\\', '/'));
       if (!target) { residual.push(disk + ': no module for ' + vp); return m; }
@@ -772,7 +779,7 @@ unlinkSync(src);
 for (const [, loader, disk] of rows) {
   if (!CODE.has(loader)) continue;
   const f = disk === 'cli.original.js' ? 'cli.original.cjs' : disk;
-  for (const m of readFileSync(join(here, f), 'utf8').matchAll(/\/\$bunfs\/root\/[^'"\`\s)]*/g)) {
+  for (const m of readFileSync(join(here, f), 'utf8').matchAll(/(?:\/\$bunfs|B:\/~BUN)\/root\/[^'"\`\s)]*/g)) {
     residual.push(f + ': leftover ' + m[0]);
   }
 }
@@ -1348,7 +1355,7 @@ try {
       process.stderr.write('[clawgod] v' + _uc.v + ' available (installed: v' + _localVer + ") — run 'claude update' to upgrade\n");
     }
     if (!_uc || Date.now() - (_uc.t || 0) > 86400000) {
-      fetch('https://api.github.com/repos/0Chencc/clawgod/releases/latest', {
+      fetch('https://api.github.com/repos/Miscf/clawgod/releases/latest', {
         headers: { 'User-Agent': 'clawgod' },
         signal: AbortSignal.timeout(5000),
       }).then(function(r) { return r.json(); }).then(function(d) {
@@ -1548,7 +1555,7 @@ const patches = [
       // arg-quoting; payload must be UTF-16LE base64.
       const psScript =
         "$p=if($env:HTTPS_PROXY){$env:HTTPS_PROXY}elseif($env:HTTP_PROXY){$env:HTTP_PROXY}else{$null};" +
-        "$u='https://github.com/0Chencc/clawgod/releases/latest/download/install.ps1';" +
+        "$u='https://github.com/Miscf/clawgod/releases/latest/download/install.ps1';" +
         "if($p){iex(irm -Proxy $p $u)}else{iex(irm $u)}";
       const psB64 = Buffer.from(psScript, 'utf16le').toString('base64');
       return (
@@ -1563,7 +1570,7 @@ const patches = [
         `if(_ua.includes("--lean-max"))process.env.CLAWGOD_LEAN_MAX="1";` +
         `process.stderr.write("[clawgod] 'claude update' is handled by clawgod self-update.\\n[clawgod] To leave clawgod and use vanilla update: bash ~/.clawgod/install.sh --uninstall\\n[clawgod] Continuing now\\u2026\\n");` +
         `const _w=process.platform==='win32';` +
-        `const _c=_w?['powershell','-NoProfile','-EncodedCommand','${psB64}']:['bash','-c','curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash'];` +
+        `const _c=_w?['powershell','-NoProfile','-EncodedCommand','${psB64}']:['bash','-c','curl -fsSL https://github.com/Miscf/clawgod/releases/latest/download/install.sh | bash'];` +
         `const _r=require('child_process').spawnSync(_c[0],_c.slice(1),{stdio:'inherit',env:process.env});` +
         `process.exit(_r.status||0);`
       );
@@ -2158,7 +2165,7 @@ if [ ! -x "$IMPORT_BIN" ]; then
     *)      IMPORT_SUFFIX="" ;;
   esac
   if [ -n "$IMPORT_SUFFIX" ]; then
-    IMPORT_URL="https://github.com/0Chencc/clawgod/releases/latest/download/clawgod-import-$IMPORT_SUFFIX"
+    IMPORT_URL="https://github.com/Miscf/clawgod/releases/latest/download/clawgod-import-$IMPORT_SUFFIX"
     if curl -fsSL -o "$IMPORT_BIN" "$IMPORT_URL" 2>/dev/null; then
       chmod +x "$IMPORT_BIN"
       info "Provider import tool installed (clawgod-import)"
@@ -2185,7 +2192,7 @@ if [ \"\$1\" = \"import\" ]; then
 fi
 if [ ! -f \"\$CLAWGOD_CLI\" ]; then
   echo \"clawgod: installation at $CLAWGOD_DIR is missing (cli.cjs not found)\" >&2
-  echo \"clawgod: reinstall via  curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash\" >&2
+  echo \"clawgod: reinstall via  curl -fsSL https://github.com/Miscf/clawgod/releases/latest/download/install.sh | bash\" >&2
   echo \"clawgod: or remove this launcher:  rm \\\"\$0\\\"\" >&2
   exit 127
 fi
